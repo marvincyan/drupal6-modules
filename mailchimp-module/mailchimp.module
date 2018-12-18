@@ -1,0 +1,204 @@
+<?php
+/**
+ * @file
+ * Module to integrate with Mailchimp.
+ */
+
+define('MC_SITE1_APIKEY', 'XXXXXXXXXX');
+define('MC_SITE1_MASTER_LIST', 'XXXXXXXXXX');
+define('MC_SITE2_APIKEY', 'XXXXXXXXXX');
+define('MC_SITE2_MASTER_LIST', 'XXXXXXXXXX');
+
+require_once 'includes/forms.inc';
+require_once 'includes/helpers.inc';
+
+
+/**
+ * Register hook_menu()
+ */
+function mailchimp_menu() {
+  $items = array();
+  $items['ajax/newsletter'] = array(
+    'page callback'    => 'mailchimp_newsletter',
+    'access arguments' => array('access content'),
+    'type'             => MENU_CALLBACK
+  );
+
+  return $items;
+}
+
+function mailchimp_newsletter() {
+  $user['email'] = check_plain($_GET['email']);
+
+  if (isset($_GET['product_code'])) {
+    $user['lot_alert_product_code'] = check_plain($_GET['product_code']);
+  }
+
+  mailchimp_subscribe(0, 'newsletter', $user);
+
+  print_r(array('status'=>'true'));
+
+  exit;
+}
+
+function mailchimp_subscribe($id, $type, $user = NULL, $partner_id = NULL) {
+  $list_info = mailchimp_get_list_info($partner_id);
+
+  if (is_null($user)) {
+    $user = mailchimp_user_info($id, $type);
+  }
+  $mc_user = mailchimp_search($user['email'], $list_info['api_key']);
+
+  $url = "https://us18.api.mailchimp.com/3.0/lists/" . $list_info['list_id'] . "/members/";
+
+  $header = array('Authorization: apikey ' . $list_info['api_key']);
+
+  $properties = array();
+  $properties['FNAME'] = (isset($user['firstname'])) ? $user['firstname'] : (isset($mc_user->exact_matches->members[0]->id)) ? $mc_user->exact_matches->members[0]->merge_fields->FNAME : '';
+  $properties['LNAME'] = (isset($user['lastname'])) ? $user['lastname'] : (isset($mc_user->exact_matches->members[0]->id)) ? $mc_user->exact_matches->members[0]->merge_fields->LNAME : '';
+
+  if ($type == 'reservation') {
+    $properties['MMERGE12'] = (isset($user['product_code'])) ? $user['product_code'] : '';
+    $properties['MMERGE17'] = (isset($user['parking_name'])) ? $user['parking_name'] : '';
+  }
+
+  if (isset($user['lot_alert_product_code'])) {
+    $properties['MMERGE16'] = $user['lot_alert_product_code'];
+    unset($properties['FNAME']);
+    unset($properties['LNAME']);
+  }
+
+  $data_array = array(
+    "email_address" => $user['email'],
+    "status" => "subscribed",
+    "merge_fields" => $properties,
+  );
+
+  $data = json_encode($data_array);
+
+  if (isset($mc_user->exact_matches->members[0]->id)) {
+    $url .= $mc_user->exact_matches->members[0]->id;
+    $reply = patch_request($url, $data, $header);
+  } else {
+    $reply = post_request($url, $data, $header);
+  }
+
+  return json_decode($reply);
+}
+
+function mailchimp_unsubscribe($id, $partner_id = NULL) {
+  $list_info = mailchimp_get_list_info($partner_id);
+  $user = mailchimp_user_info($id, 'unsubscribe');
+  $mc_user = mailchimp_search($user['email'], $list_info['api_key']);
+
+  if (isset($mc_user->exact_matches->members[0]->id)) {
+
+    $url = "https://us18.api.mailchimp.com/3.0/lists/" . $list_info['list_id'] . "/members/" . $mc_user->exact_matches->members[0]->id;
+
+    $header = array('Authorization: apikey ' . $list_info['api_key']);
+
+    $data_array = array(
+      "status" => "unsubscribed",
+    );
+
+    $data = json_encode($data_array);
+    $reply = patch_request($url, $data, $header);
+
+    return json_decode($reply);
+  }
+}
+
+function mailchimp_user_update($id, $oldEmail, $data, $partner_id = NULL) {
+  $list_info = mailchimp_get_list_info($partner_id);
+
+  $url = "https://us18.api.mailchimp.com/3.0/lists/" . $list_info['list_id'] . "/members/" . md5($oldEmail);
+
+  $header = array('Authorization: apikey ' . $list_info['api_key']);
+
+  $data_array = array(
+    "email_address" => $data['mail'],
+    "merge_fields" => array(
+      "FNAME" => $data['firstname'],
+      "LNAME" => $data['lastname']
+    )
+  );
+
+  $data = json_encode($data_array);
+  $reply = put_request($url, $data, $header);
+
+  return json_decode($reply);
+}
+
+function mailchimp_search($email, $api_key = MC_SITE1_APIKEY) {
+  $url = "https://us18.api.mailchimp.com/3.0/search-members";
+
+  $header = array('Authorization: apikey ' . $api_key);
+
+  $data_array = array(
+    "query" => $email
+  );
+
+  $data = http_build_query($data_array);
+  $reply = get_request($url, $data, $header);
+
+  return json_decode($reply);
+}
+
+function mailchimp_user_info($id, $type) {
+  switch ($type) {
+    case 'reservation':
+      $query = "
+        SELECT
+          ra.partner_id,
+          r.firstname,
+          r.lastname,
+          r.email,
+          aa.product_code,
+          ap.parking_name
+        FROM
+          parking_reservation  r
+        JOIN
+          parking_reservation_analytics ra ON r.reservation_id = ra.reservation_id
+        JOIN
+          product aa ON aa.product_id = ra.product_id
+        LEFT JOIN
+          parking ap ON ap.parking_id = r.parking_id
+        WHERE r.reservation_id = " . $id;
+
+      $user = db_fetch_array(db_query($query));
+    break;
+
+    case 'registration':
+      $query = "
+        SELECT 
+          au.firstname,
+          au.lastname,
+          u.mail as email,
+          au.site,
+          u.created
+        FROM
+          users u
+        LEFT JOIN
+          user au ON u.uid = au.user_id
+        WHERE u.uid = " . $id;
+
+      $user = db_fetch_array(db_query($query));
+    break;
+
+    case 'unsubscribe':
+      $query = "
+        SELECT
+          u.mail as email,
+          au.site
+        FROM
+          users u
+        LEFT JOIN
+          user au ON u.uid = au.user_id
+        WHERE
+          u.uid = '" . $id. "'";
+      $user = db_fetch_array(db_query($query));
+    break;
+  }
+
+  return $user;
+}

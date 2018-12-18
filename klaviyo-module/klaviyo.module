@@ -1,0 +1,213 @@
+<?php
+/**
+ * @file
+ * Module to integrate with Klaviyo.
+ */
+
+define('KL_SITE1_APIKEY', 'XXXXXXXXXX');
+define('KL_SITE1_MASTER_LIST', 'XXXXXXXXXX');
+define('KL_SITE1_LOT_ALERT_LIST', 'XXXXXXXXXX');
+define('KL_SITE2_APIKEY', 'XXXXXXXXXX');
+define('KL_SITE2_MASTER_LIST', 'XXXXXXXXXX');
+define('KL_SITE2_LOT_ALERT_LIST', 'XXXXXXXXXX');
+
+require_once 'includes/forms.inc';
+
+
+/**
+ * Register hook_menu()
+ */
+function klaviyo_menu() {
+  $items = array();
+  $items['ajax/newsletter'] = array(
+    'page callback'    => 'klaviyo_newsletter',
+    'access arguments' => array('access content'),
+    'type'             => MENU_CALLBACK
+  );
+
+  return $items;
+}
+
+function klaviyo_subscribe($id, $type, $user = NULL) {
+  if ( ($type != 'newsletter') && (is_null($user)) ) {
+    $user = klaviyo_user_info($id, $type);
+  }
+  $url = "https://a.klaviyo.com/api/v1/list/".$user['list_id']."/members";
+
+  $properties = array(
+    "\$first_name" => $user['firstname'],
+    "\$last_name" => $user['lastname']
+  );
+  $properties['Lot Alert Product Code'] = (isset($user['lot_alert_product_code'])) ? $user['lot_alert_product_code'] : '';
+  $properties['Product Code'] = (isset($user['product_code'])) ? $user['product_code'] : '';
+  $properties['Lot Name'] = (isset($user['parking_name'])) ? $user['parking_name'] : '';
+
+  $data_array = array(
+    "api_key" => $user['api_key'],
+    "email" => $user['email'],
+    "properties" => json_encode($properties),
+    "confirm_optin" => "false",
+  );
+
+  $data = recursive_http_build_query($data_array);
+  $reply = post_request($url, $data, '');
+
+  return json_decode($reply);
+}
+
+function klaviyo_unsubscribe($id) {
+  $user = klaviyo_user_info($id, 'unsubscribe');
+  $url = "https://a.klaviyo.com/api/v1/list/".$user['list_id']."/members/exclude";
+
+  $data_array = array(
+    "api_key" => $user['api_key'],
+    "email" => $user['email'],
+  );
+
+  $data = http_build_query($data_array);
+  $reply = post_request($url, $data, '');
+
+  return json_decode($reply);
+}
+
+function klaviyo_user_update($oldEmail, $data) {
+  $user = klaviyo_search($oldEmail);
+  $url = "https://a.klaviyo.com/api/v1/person/".$user->data[0]->person->id;
+
+  $data_array = array(
+    "api_key" => KL_SITE1_APIKEY,
+    "email" => $data['mail'],
+    "\$first_name" => $data['firstname'],
+    "\$last_name" => $data['lastname']
+  );
+
+  $data = http_build_query($data_array);
+  $reply = put_request($url, $data, '');
+
+  return json_decode($reply);
+}
+
+function klaviyo_newsletter() {
+  $user['api_key'] = KL_SITE1_APIKEY;
+  $user['list_id'] = KL_SITE1_MASTER_LIST;
+  $user['email'] = check_plain($_GET['email']);
+
+  if (isset($_GET['product_code'])) {
+    $user['list_id'] = KL_SITE1_LOT_ALERT_LIST;
+    $user['lot_alert_product_code'] = check_plain($_GET['product_code']);
+  }
+
+  klaviyo_subscribe(0, 'newsletter', $user);
+
+  print_r(array('status'=>'true'));
+
+  exit;
+}
+
+function klaviyo_search($email, $status = FALSE) {
+  $url = "https://a.klaviyo.com/api/v1/list/".KL_SITE1_MASTER_LIST."/members";
+
+  $data_array = array(
+    "api_key" => KL_SITE1_APIKEY,
+    "email" => $email,
+  );
+
+  $data = http_build_query($data_array);
+  $reply = get_request($url, $data, '');
+  $result = json_decode($reply);
+
+  if ($status) {
+    return $result->total;
+  } else {
+    return $result;
+  }
+}
+
+function klaviyo_user_info($id, $type) {
+  switch ($type) {
+    case 'reservation':
+    $query = "
+      SELECT
+        ra.partner_id,
+        r.firstname,
+        r.lastname,
+        r.email,
+        aa.product_code,
+        ap.parking_name
+      FROM
+        parking_reservation  r
+      JOIN
+        parking_reservation_analytics ra ON r.reservation_id = ra.reservation_id
+      JOIN
+        product aa ON aa.product_id = ra.product_id
+      LEFT JOIN
+        parking ap ON ap.parking_id = r.parking_id
+      WHERE r.reservation_id = " . $id;
+
+      $user = db_fetch_array(db_query($query));
+    break;
+
+    case 'registration':
+      $query = "
+        SELECT 
+          au.firstname,
+          au.lastname,
+          u.mail as email,
+          au.site,
+          u.created
+        FROM
+          users u
+        LEFT JOIN
+          user au ON u.uid = au.user_id
+        WHERE u.uid = " . $id;
+
+      $user = db_fetch_array(db_query($query));
+
+      if ($user['site'] == 0) {
+        $user['api_key'] = KL_SITE1_APIKEY;
+        $user['list_id'] = KL_SITE1_MASTER_LIST;
+      }
+      if ($user['site'] == 1) {
+        $user['api_key'] = KL_SITE2_APIKEY;
+        $user['list_id'] = KL_SITE2_MASTER_LIST;
+      }
+    break;
+
+    case 'unsubscribe':
+      $query = "
+        SELECT
+          u.mail as email,
+          au.site
+        FROM
+          users u
+        LEFT JOIN
+          user au ON u.uid = au.user_id
+        WHERE
+          u.uid = '" . $id. "'";
+      $user = db_fetch_array(db_query($query));
+
+      if ($user['site'] == 0) {
+        $user['api_key'] = KL_SITE1_APIKEY;
+        $user['list_id'] = KL_SITE1_MASTER_LIST;
+      }
+      if ($user['site'] == 1) {
+        $user['api_key'] = KL_SITE2_APIKEY;
+        $user['list_id'] = KL_SITE2_MASTER_LIST;
+      }
+    break;
+  }
+
+  // Check partner_id
+  if (isset($user['partner_id'])) {
+    if (($user['partner_id'] == 0) || ($user['partner_id'] == 1234)) {
+      $user['api_key'] = KL_SITE1_APIKEY;
+      $user['list_id'] = KL_SITE1_MASTER_LIST;
+    }
+    if ($user['partner_id'] == 5678) {
+      $user['api_key'] = KL_SITE2_APIKEY;
+      $user['list_id'] = KL_SITE2_MASTER_LIST;
+    }
+  }
+
+  return $user;
+}

@@ -1,0 +1,7 @@
+; $Id$
+
+name = Parking
+description = "Enables communication with the Parking reservation system.."
+package = PRODUCT
+version = 2.0.0
+core = 6.x

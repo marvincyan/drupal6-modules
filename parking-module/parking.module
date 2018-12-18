@@ -1,0 +1,93 @@
+<?php
+
+/**
+ * @file
+ * Provides Parking integration for Product.
+ **/
+
+require_once "includes/cron.inc";
+require_once "includes/helpers.inc";
+
+//define('P_BASE_URL', 'XXXXXXXXXX'); // Test URL
+//define('P_AUTHORIZATION', 'XXXXXXXXXX'); // Test Auth
+define('P_BASE_URL', 'XXXXXXXXXX');
+define('P_AUTHORIZATION', 'XXXXXXXXXX');
+define('P_APP_ID', 'XXXXXXXXXX');
+define('P_COMPANY_ID', 'XXXXXXXXXX');
+
+function parking_send_reservation() {
+  $pending_reservations = (array)parking_get_pending_reservations();
+  $pending_cancellations = (array)parking_get_pending_cancellations();
+  $pending_updates = (array)parking_get_pending_updates();
+
+  if (!empty($pending_reservations)) {
+    // GET TEMP AUTH TOKEN
+    if ($authorization = parking_get_auth_token()) {
+
+      // GET COMPANIES
+      if ($company_id = parking_get_companies($authorization)) {
+
+        // GET AUTH TOKEN
+        if ($authorization = parking_get_auth_token($company_id)) {
+
+          foreach ($pending_reservations as $k=>$lot) {
+            $quote_id = "";
+            $channel_id = "";
+
+            if ($channel_id = parking_get_channels($authorization, $lot['parking_address'], $lot['parking_zip'])) {
+              $reservation = aap_reservation_load_info($lot['reservation_id']);
+              if ($quote_id = parking_create_quote($authorization, $channel_id, $reservation)) {
+                parking_create_reservation($authorization, $quote_id, $reservation);
+              }
+            }
+          }
+
+        }
+      }
+    }
+  }
+
+  if (!empty($pending_cancellations)) {
+    if ($authorization = parking_get_auth_token()) {
+
+      // GET COMPANIES
+      if ($company_id = parking_get_companies($authorization)) {
+
+        // GET AUTH TOKEN
+        if ($authorization = parking_get_auth_token($company_id)) {
+          foreach ($pending_cancellations as $k=>$reservation) {
+            parking_delete_reservation($authorization, $reservation['parking_id'], $reservation['reservation_id']);
+          }
+        }
+      }
+    }
+  }
+
+  if (!empty($pending_updates)) {
+    if ($authorization = parking_get_auth_token()) {
+
+      // GET COMPANIES
+      if ($company_id = parking_get_companies($authorization)) {
+
+        // GET AUTH TOKEN
+        if ($authorization = parking_get_auth_token($company_id)) {
+          foreach ($pending_updates as $k=>$reservation) {
+            $quote_id = "";
+            $channel_id = "";
+
+            if (parking_delete_reservation($authorization, $reservation['parking_id'], $reservation['reservation_id'])) {
+              if (parking_insert_pending($reservation['reservation_id'], $reservation['parking_id'])) {
+                if ($channel_id = parking_get_channels($authorization, $reservation['parking_address'], $reservation['parking_zip'])) {
+                  $reservation = aap_reservation_load_info($reservation['reservation_id']);
+                  if ($quote_id = parking_create_quote($authorization, $channel_id, $reservation)) {
+                    parking_create_reservation($authorization, $quote_id, $reservation);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+; $Id$
+
+name = Klaviyo
+description = "Integrate email subscription service with Klaviyo."
+dependencies[] = aap_core
+package = AAP
+version = 1.0.0
+core = 6.x

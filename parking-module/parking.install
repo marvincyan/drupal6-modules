@@ -1,0 +1,39 @@
+<?php
+
+/**
+ * @file
+ * Parking Sync table
+ */
+
+function parking_install() {
+  global $db_type;
+  $ret = array();
+
+  switch ($db_type) {
+    case 'mysql':
+    case 'mysqli':
+      db_query("CREATE TABLE parking_sync (
+        `reservation_id` INT(11) NOT NULL, 
+        `parking_id` INT(11) NOT NULL DEFAULT 0, 
+        `status` VARCHAR(11) NOT NULL DEFAULT 'PENDING', 
+        `message` TINYTEXT DEFAULT NULL, 
+        `cancelled_on` TIMESTAMP NOT NULL DEFAULT '0000-00-00 00:00:00', 
+        `synced_on` TIMESTAMP NOT NULL DEFAULT '0000-00-00 00:00:00', 
+        `created_on` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, 
+        PRIMARY KEY (reservation_id))");
+      break;
+  }
+}
+
+function parking_uninstall() {
+  db_drop_table($ret, "parking_sync");
+}
+
+function parking_update_1() {
+  $ret = array();
+
+  db_query("ALTER TABLE {parking_sync} DROP PRIMARY KEY");
+  db_query("ALTER TABLE {parking_sync} ADD INDEX (reservation_id)");
+
+  return $ret;
+}

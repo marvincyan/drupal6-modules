@@ -1,0 +1,8 @@
+; $Id$
+
+name = Mailchimp
+description = "Integrate email subscription service with Mailchimp."
+dependencies[] = product_core
+package = PRODUCT
+version = 1.0.0
+core = 6.x
